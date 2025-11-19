@@ -171,3 +171,47 @@ class Grafo:
     
     # ---------- Construcción de grafo desde archivo ----------
 
+    @classmethod
+    def desde_archivo(cls, ruta, dirigido=False, separador=","):
+        """
+        Carga un grafo desde un archivo de texto.
+        Cada línea debe tener el formato:
+            origen,separador,destino,separador,peso
+        """
+        grafo = cls(dirigido=dirigido)
+
+        try:
+            with open(ruta, "r", encoding="utf-8") as f:
+                for linea in f:
+                    linea = linea.strip()
+
+                    # Saltar líneas vacías o comentarios
+                    if not linea or linea.startswith("#"):
+                        continue
+
+                    partes = linea.split(separador)
+
+                    if len(partes) < 2:
+                        raise ValueError(f"Línea inválida: {linea}")
+
+                    origen = partes[0].strip()
+                    destino = partes[1].strip()
+
+                    # Si no hay peso, se asume 1
+                    if len(partes) >= 3:
+                        try:
+                            peso = float(partes[2])
+                        except ValueError:
+                            raise ValueError(f"Peso inválido en línea: {linea}")
+                    else:
+                        peso = 1
+
+                    grafo.add_arista(origen, destino, peso)
+
+            return grafo
+
+        except FileNotFoundError:
+            raise FileNotFoundError(f"No se encontró el archivo: {ruta}")
+
+        except Exception as e:
+            raise Exception(f"Error al leer el archivo {ruta}: {e}")
