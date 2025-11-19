@@ -1,0 +1,6 @@
+# Campus EPN (modelo pequeño)
+Aula_101,Hall
+Aula_102,Hall
+Hall,Pasillo
+Pasillo,Laboratorio
+Pasillo,Salida

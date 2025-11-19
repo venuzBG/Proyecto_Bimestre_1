@@ -168,3 +168,6 @@ class Grafo:
         for u, v in aristas:
             arbol.add_arista(u, v)
         return arbol
+    
+    # ---------- Construcción de grafo desde archivo ----------
+
