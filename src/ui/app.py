@@ -1,11 +1,22 @@
+"""
+app.py
+------
+Interfaz gráfica del proyecto usando Flet.
+
+Desde aquí:
+- Se carga el grafo del campus desde un archivo .txt.
+- Se ejecutan los algoritmos BFS y DFS sobre el TDA Grafo.
+- Se dibuja el grafo y los árboles BFS/DFS usando igraph + matplotlib.
+- Se muestran los resultados (distancias, padres, rutas, tiempos, etc.).
+"""
+
 import base64
 import io
+import time
 
 import flet as ft
 import igraph as ig
 import matplotlib.pyplot as plt
-import time
-import matplotlib.pyplot as plt  # ya lo usábamos para la ventana grande
 
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_agg import FigureCanvasAgg
@@ -27,38 +38,45 @@ class FletGraphApp:
       en un panel con scroll.
     """
 
+    # ----------------------------------------------------------
+    #  CONSTRUCTOR
+    # ----------------------------------------------------------
     def __init__(self):
+        # Referencia al grafo de campus (TDA Grafo)
         self.grafo: Grafo | None = None
+
+        # Últimos resultados calculados
         self.bfs_result = None
         self.dfs_result = None
 
-        # Controles que se rellenan en main()
+        # Controles de Flet que se inicializan en main()
         self.start_dd: ft.Dropdown | None = None
         self.run_bfs_btn: ft.ElevatedButton | None = None
         self.run_dfs_btn: ft.ElevatedButton | None = None
         self.info_panel: ft.Container | None = None
-        self.graph_image: ft.Image | None = None
-        self.tree_image: ft.Image | None = None
-    
-        # ==========================================================
-    #   NUEVAS VENTANAS GRANDES (MATPLOTLIB) PARA GRAFO Y ÁRBOL
-    # ==========================================================
+        self.graph_image: ft.Image | None = None      # miniatura del grafo
+        self.tree_image: ft.Image | None = None       # miniatura del árbol
 
+    # ==========================================================
+    #   VENTANAS GRANDES (MATPLOTLIB) PARA GRAFO Y ÁRBOL
+    # ==========================================================
     def show_graph_window(self, e: ft.ControlEvent):
         """
-        Abre una ventana nueva de Matplotlib con el grafo grande.
-        Si hay resultados de BFS/DFS, resalta:
-          - ruta BFS en rojo 'tomato'
-          - ruta DFS en celeste
+        Abre una ventana nueva de Matplotlib con el grafo en grande.
+
+        Si ya se ejecutaron BFS/DFS:
+          - Resalta la ruta BFS en rojo 'tomato'
+          - Resalta la ruta DFS en celeste
         """
         if not self.grafo:
-            # Nada cargado: no hacemos nada (o podrías imprimir un print)
+            # Nada cargado: no hacemos nada
             return
 
-        # --- Construir grafo de igraph como en _graph_base64 ---
+        # --- Construir grafo de igraph a partir del TDA Grafo ---
         nombres = self.grafo.nodos()
         name_to_idx = {name: i for i, name in enumerate(nombres)}
 
+        # Conjunto de aristas sin duplicar (como grafo no dirigido)
         edges = set()
         for u in self.grafo.nodos():
             for v, _ in self.grafo.vecinos(u):
@@ -71,15 +89,16 @@ class FletGraphApp:
             g_ig.add_edges(list(edges))
         g_ig.vs["label"] = nombres
 
-        layout = g_ig.layout("kk")
-        coords = self._normalized_layout(layout)
+        layout = g_ig.layout("kk")               # layout de Kamada-Kawai
+        coords = self._normalized_layout(layout) # normalizamos coordenadas
 
-        # --- Rutas BFS / DFS (lista de pares de nodos) ---
+        # --- Aristas/ruta de BFS y DFS (para colorear) ---
         bfs_edges = set()
         dfs_edges = set()
         bfs_nodes = set()
         dfs_nodes = set()
 
+        # Ruta más corta encontrada por BFS
         if self.bfs_result and self.bfs_result.get("path"):
             path = self.bfs_result["path"]
             bfs_nodes = set(path)
@@ -89,6 +108,7 @@ class FletGraphApp:
                 pb = name_to_idx[b]
                 bfs_edges.add(tuple(sorted((pa, pb))))
 
+        # Ruta DFS hacia la salida
         if self.dfs_result and self.dfs_result.get("dfs_path"):
             path = self.dfs_result["dfs_path"]
             dfs_nodes = set(path)
@@ -98,11 +118,10 @@ class FletGraphApp:
                 pb = name_to_idx[b]
                 dfs_edges.add(tuple(sorted((pa, pb))))
 
-        # --- Dibujar en una ventana nueva ---
+        # --- Dibujar en una ventana nueva de matplotlib ---
         fig, ax = plt.subplots(figsize=(8, 6), dpi=100)
         ax.set_axis_off()
-
-        r = 0.035
+        r = 0.035  # radio de cada nodo
 
         # 1) Todas las aristas en gris
         for u, v in g_ig.get_edgelist():
@@ -110,52 +129,54 @@ class FletGraphApp:
             x2, y2 = coords[v]
             ax.plot([x1, x2], [y1, y2], color="gray", linewidth=1.5, zorder=1)
 
-        # 2) Aristas BFS en rojo tomate
+        # 2) Aristas de la ruta BFS en rojo
         for u, v in bfs_edges:
             x1, y1 = coords[u]
             x2, y2 = coords[v]
             ax.plot([x1, x2], [y1, y2], color="tomato", linewidth=3, zorder=2)
 
-        # 3) Aristas DFS en celeste
+        # 3) Aristas de la ruta DFS en celeste
         for u, v in dfs_edges:
             x1, y1 = coords[u]
             x2, y2 = coords[v]
             ax.plot([x1, x2], [y1, y2], color="#4dabf7", linewidth=2.5, zorder=3)
 
-        # 4) Nodos
+        # 4) Nodos del grafo
         for vid in range(g_ig.vcount()):
             x, y = coords[vid]
             name = g_ig.vs[vid]["label"]
 
-            # Color base
+            # Color base del nodo
             face = "#8ce99a"   # verde suave
 
-            # Si pertenece a BFS o DFS cambiamos color
+            # Si pertenece a la ruta BFS o DFS, cambiamos color
             if name in bfs_nodes:
                 face = "tomato"
             if name in dfs_nodes:
-                # si está en DFS, lo pintamos celeste (pisando el anterior)
-                face = "#4dabf7"
+                face = "#4dabf7"   # DFS pisa el color anterior
 
-            circ = Circle((x, y), r, facecolor=face, edgecolor="black", linewidth=1.8)
+            circ = Circle((x, y), r, facecolor=face,
+                          edgecolor="black", linewidth=1.8)
             ax.add_patch(circ)
-            ax.text(x, y, name, ha="center", va="center", fontsize=10, zorder=4)
+            ax.text(x, y, name, ha="center", va="center",
+                    fontsize=10, zorder=4)
 
         ax.set_xlim(-0.1, 1.1)
         ax.set_ylim(-0.1, 1.1)
         ax.set_aspect("equal")
 
-        plt.title("Grafo")
+        plt.title("Grafo del campus")
         plt.tight_layout()
         plt.show()
 
     def show_tree_window(self, e: ft.ControlEvent):
         """
-        Abre una ventana nueva de Matplotlib con el árbol.
-        Usa:
-          - BFS si existe resultado BFS
-          - si no, DFS
-        Resalta el camino relevante (BFS/DFS) igual que el grafo.
+        Abre una ventana nueva de Matplotlib con el árbol BFS/DFS en grande.
+
+        Toma:
+          - Resultado BFS si existe,
+          - caso contrario, resultado DFS.
+        Resalta la ruta hacia la salida.
         """
         # Usamos BFS si existe; si no, DFS
         res = self.bfs_result or self.dfs_result
@@ -166,7 +187,7 @@ class FletGraphApp:
         if not parents:
             return
 
-        # raíz
+        # Buscar la raíz del árbol (nodo cuyo padre es None)
         root_node = None
         for n, p in parents.items():
             if p is None:
@@ -175,6 +196,7 @@ class FletGraphApp:
         if root_node is None:
             return
 
+        # Construir grafo de igraph para el árbol
         nodes = list(parents.keys())
         name_to_idx = {name: i for i, name in enumerate(nodes)}
         edges = []
@@ -190,9 +212,9 @@ class FletGraphApp:
 
         layout = tree_g.layout("tree", root=[name_to_idx[root_node]])
         coords = self._normalized_layout(layout)
-        coords = [(x, 1 - y) for x, y in coords]  # raíz arriba
+        coords = [(x, 1 - y) for x, y in coords]  # invertimos Y para que raíz quede arriba
 
-        # Camino BFS o DFS
+        # Rutas BFS / DFS en el árbol
         bfs_nodes = set()
         dfs_nodes = set()
         bfs_edges = set()
@@ -222,61 +244,65 @@ class FletGraphApp:
         ax.set_axis_off()
         r = 0.045
 
-        # 1) Aristas normales
+        # 1) Aristas del árbol
         for u, v in tree_g.get_edgelist():
             x1, y1 = coords[u]
             x2, y2 = coords[v]
             ax.plot([x1, x2], [y1, y2], color="black", linewidth=1.5, zorder=1)
 
-        # 2) Camino BFS (rojo)
+        # 2) Camino BFS en rojo
         for u, v in bfs_edges:
             x1, y1 = coords[u]
             x2, y2 = coords[v]
             ax.plot([x1, x2], [y1, y2], color="tomato", linewidth=3, zorder=2)
 
-        # 3) Camino DFS (celeste)
+        # 3) Camino DFS en celeste
         for u, v in dfs_edges:
             x1, y1 = coords[u]
             x2, y2 = coords[v]
             ax.plot([x1, x2], [y1, y2], color="#4dabf7", linewidth=2.5, zorder=3)
 
-        # 4) Nodos
+        # 4) Nodos del árbol
         for vid in range(tree_g.vcount()):
             x, y = coords[vid]
             name = tree_g.vs[vid]["label"]
 
-            face = "white"  # base
+            face = "white"  # color base del nodo
 
             if name in bfs_nodes:
                 face = "tomato"
             if name in dfs_nodes:
                 face = "#4dabf7"
 
-            circ = Circle((x, y), r, facecolor=face, edgecolor="black", linewidth=1.8)
+            circ = Circle((x, y), r, facecolor=face,
+                          edgecolor="black", linewidth=1.8)
             ax.add_patch(circ)
-            ax.text(x, y, name, ha="center", va="center", fontsize=10, zorder=4)
+            ax.text(x, y, name, ha="center", va="center",
+                    fontsize=10, zorder=4)
 
         ax.set_xlim(-0.1, 1.1)
         ax.set_ylim(-0.1, 1.1)
         ax.set_aspect("equal")
 
-        titulo = "Árbol "
-        plt.title(titulo)
+        plt.title("Árbol BFS/DFS")
         plt.tight_layout()
         plt.show()
 
-    
     # ==========================================================
-    #   FUNCIÓN PRINCIPAL DE FLET
+    #   FUNCIÓN PRINCIPAL DE FLET (CONSTRUYE LA UI)
     # ==========================================================
     def main(self, page: ft.Page):
+        """
+        Se ejecuta cuando Flet arranca.
+        Aquí se construye toda la interfaz de usuario.
+        """
         page.title = "Rutas en Grafos - BFS y DFS (Flet)"
         page.horizontal_alignment = "center"
         page.vertical_alignment = "start"
         page.padding = 20
         page.theme_mode = ft.ThemeMode.LIGHT
 
-        # ---------- Selector de archivo para el grafo ----------
+        # ---------- Selector de archivo para el grafo (.txt) ----------
         file_picker = ft.FilePicker(
             on_result=lambda e: self.on_file_selected(e, page)
         )
@@ -294,7 +320,7 @@ class FletGraphApp:
         # ---------- Controles para BFS/DFS ----------
         self.start_dd = ft.Dropdown(
             label="Nodo inicio (start)",
-            options=[],
+            options=[],       # se llenan cuando se carga el grafo
             disabled=True,
             width=250,
         )
@@ -313,7 +339,7 @@ class FletGraphApp:
             on_click=lambda _: self.run_dfs_campus(page),
         )
 
-        # ---------- Imágenes del grafo y árbol (miniaturas) ----------
+        # ---------- Imágenes del grafo y del árbol (miniaturas) ----------
         self.graph_image = ft.Image(
             width=380,
             height=260,
@@ -336,7 +362,7 @@ class FletGraphApp:
             padding=10,
         )
 
-        # ---------- Layout general ----------
+        # ---------- Layout general de la página ----------
         page.add(
             ft.Column(
                 controls=[
@@ -385,15 +411,20 @@ class FletGraphApp:
         )
 
     # ==========================================================
-    #   CALLBACK: CUANDO SE SELECCIONA EL ARCHIVO DEL GRAFO
+    #   CUANDO SE SELECCIONA EL ARCHIVO DEL GRAFO
     # ==========================================================
     def on_file_selected(self, e: ft.FilePickerResultEvent, page: ft.Page):
+        """
+        Lee el archivo .txt seleccionado y construye el grafo de campus.
+        Después, llena el combo de nodos y dibuja la miniatura del grafo.
+        """
         if not e.files:
             return
 
         path = e.files[0].path
 
         try:
+            # Construimos el TDA Grafo a partir del archivo
             self.grafo = Grafo.desde_archivo(path, dirigido=False, separador=",")
         except Exception as ex:
             page.snack_bar = ft.SnackBar(ft.Text(f"Error al cargar grafo: {ex}"))
@@ -407,11 +438,11 @@ class FletGraphApp:
         self.start_dd.value = nodos[0] if nodos else None
         self.start_dd.disabled = False
 
-        # Habilitar botones
+        # Habilitar botones de ejecución
         self.run_bfs_btn.disabled = False
         self.run_dfs_btn.disabled = False
 
-        # Dibujar grafo miniatura
+        # Dibujar miniatura del grafo (sin animación)
         self.update_graph_image(page)
 
         page.snack_bar = ft.SnackBar(ft.Text(f"Grafo cargado desde: {path}"))
@@ -419,16 +450,25 @@ class FletGraphApp:
         page.update()
 
     # ==========================================================
-    #   EJECUCIÓN BFS / DFS EN MODO CAMPUS
+    #   EJECUCIÓN BFS / DFS EN EL CAMPUS
     # ==========================================================
     def run_bfs_campus(self, page: ft.Page):
+        """
+        Ejecuta BFS desde el nodo elegido y:
+        - Encuentra la salida más cercana (nodo 'Salida_*').
+        - Guarda el resultado.
+        - Anima el recorrido en el grafo.
+        - Muestra el árbol BFS y la info en el panel de texto.
+        """
         if not self.grafo or not self.start_dd.value:
             return
 
         start = self.start_dd.value
 
+        # 1) BFS completo desde start (no nos detenemos en la primera salida)
         res = self.grafo.bfs(start, goal=None)
 
+        # 2) Detectar salidas automáticamente
         salidas = self.grafo.nodos_salida(prefijo="Salida")
         salidas_reach = [s for s in salidas if s in res["distances"]]
 
@@ -440,23 +480,36 @@ class FletGraphApp:
             page.update()
             return
 
+        # 3) Escoger la salida más cercana (distancia mínima)
         salida_cercana = min(salidas_reach, key=lambda s: res["distances"][s])
+
+        # 4) Reconstruir ruta más corta hacia esa salida
         ruta = self.grafo._reconstruir_camino(res["parents"], start, salida_cercana)
 
+        # 5) Guardar información para mostrar / dibujar
         res["start"] = start
         res["goal"] = salida_cercana
         res["path"] = ruta
         self.bfs_result = res
 
+        # 6) Animación en el grafo cargado
+        self._animar_bfs(page, res)
+
+        # 7) Panel de texto + árbol BFS en la derecha
         self.show_bfs_info(page, res)
         self.update_tree_image(page, res, algorithm="bfs")
 
     def run_dfs_campus(self, page: ft.Page):
+        """
+        Ejecuta DFS usando como 'goal' la salida más cercana encontrada por BFS.
+        Después anima el recorrido y muestra el árbol DFS.
+        """
         if not self.grafo or not self.start_dd.value:
             return
 
         start = self.start_dd.value
 
+        # Usamos BFS solo para elegir la salida más cercana
         bfs_res = self.grafo.bfs(start, goal=None)
         salidas = self.grafo.nodos_salida(prefijo="Salida")
         salidas_reach = [s for s in salidas if s in bfs_res["distances"]]
@@ -471,11 +524,16 @@ class FletGraphApp:
 
         salida_cercana = min(salidas_reach, key=lambda s: bfs_res["distances"][s])
 
+        # DFS con esa salida como goal
         res = self.grafo.dfs(start, goal=salida_cercana)
         res["start"] = start
         res["goal"] = salida_cercana
         self.dfs_result = res
 
+        # Animación en el grafo cargado
+        self._animar_dfs(page, res)
+
+        # Panel de texto + árbol DFS
         self.show_dfs_info(page, res)
         self.update_tree_image(page, res, algorithm="dfs")
 
@@ -483,6 +541,10 @@ class FletGraphApp:
     #   PANEL DE RESULTADOS (TEXTO CON SCROLL)
     # ==========================================================
     def show_bfs_info(self, page: ft.Page, res):
+        """
+        Llena el panel de texto con la información de BFS:
+        distancias, padres, ruta más corta y tiempo.
+        """
         start = res["start"]
         goal = res["goal"]
         tiempo = res["time"]
@@ -530,6 +592,10 @@ class FletGraphApp:
         page.update()
 
     def show_dfs_info(self, page: ft.Page, res):
+        """
+        Llena el panel de texto con la información de DFS:
+        padres, ruta DFS hacia la salida, deepest_path y tiempo.
+        """
         start = res["start"]
         goal = res["goal"]
         tiempo = res["time"]
@@ -582,10 +648,14 @@ class FletGraphApp:
         page.update()
 
     # ==========================================================
-    #   DIBUJO DEL GRAFO Y DEL ÁRBOL (IMÁGENES PNG → base64)
+    #   DIBUJO DEL GRAFO Y DEL ÁRBOL (PNG → base64)
     # ==========================================================
     @staticmethod
     def _normalized_layout(layout):
+        """
+        Normaliza coordenadas (0..1) para que el grafo se dibuje
+        aprovechando bien el espacio.
+        """
         xs = [c[0] for c in layout]
         ys = [c[1] for c in layout]
         min_x, max_x = min(xs), max(xs)
@@ -598,6 +668,10 @@ class FletGraphApp:
 
     @staticmethod
     def _figure_to_base64(fig: Figure) -> str:
+        """
+        Convierte una figura de matplotlib a una cadena base64 (PNG).
+        Esto permite mostrar la imagen dentro de un control Image de Flet.
+        """
         buf = io.BytesIO()
         canvas = FigureCanvasAgg(fig)
         canvas.draw()
@@ -605,7 +679,7 @@ class FletGraphApp:
         buf.seek(0)
         return base64.b64encode(buf.getvalue()).decode("utf-8")
 
-    # ---------- helpers para imágenes ----------
+    # ---------- Dibujo del grafo (miniatura y versiones grandes) ----------
     def _graph_base64(self, figsize=(4, 3),
                       visited=None,
                       bfs_path=None,
@@ -613,9 +687,9 @@ class FletGraphApp:
         """
         Dibuja el grafo del campus y devuelve la imagen en base64.
 
-        visited: conjunto de nodos visitados (BFS/DFS) -> se pintan distinto
-        bfs_path: lista de nodos de la ruta BFS -> rojo "tomato"
-        dfs_path: lista de nodos de la ruta DFS -> celeste
+        visited: conjunto de nodos visitados (BFS/DFS) -> se pintan amarillo.
+        bfs_path: lista de nodos de la ruta BFS -> rojo "tomato".
+        dfs_path: lista de nodos de la ruta DFS -> celeste.
         """
         if not self.grafo:
             return ""
@@ -627,6 +701,7 @@ class FletGraphApp:
         nombres = self.grafo.nodos()
         name_to_idx = {name: i for i, name in enumerate(nombres)}
 
+        # Aristas sin duplicar
         edges = set()
         for u in self.grafo.nodos():
             for v, _ in self.grafo.vecinos(u):
@@ -647,7 +722,7 @@ class FletGraphApp:
         ax = fig.add_subplot(111)
         ax.set_axis_off()
 
-        # --- aristas "normales" ---
+        # --- aristas normales ---
         for u, v in g_ig.get_edgelist():
             x1, y1 = coords[u]
             x2, y2 = coords[v]
@@ -710,12 +785,16 @@ class FletGraphApp:
 
         return self._figure_to_base64(fig)
 
-
+    # ---------- Dibujo del árbol BFS/DFS (miniatura y grande) ----------
     def _tree_base64(self, res: dict, figsize=(4, 3)):
+        """
+        Dibuja el árbol BFS/DFS correspondiente a los padres de 'res'.
+        """
         parents = res.get("parents")
         if not parents:
             return ""
 
+        # Buscar la raíz del árbol
         root_node = None
         for n, p in parents.items():
             if p is None:
@@ -739,13 +818,14 @@ class FletGraphApp:
 
         layout = tree_g.layout("tree", root=[name_to_idx[root_node]])
         coords = self._normalized_layout(layout)
-        coords = [(x, 1 - y) for x, y in coords]
+        coords = [(x, 1 - y) for x, y in coords]  # raíz arriba
         r = 0.05
 
         fig = Figure(figsize=figsize, dpi=100)
         ax = fig.add_subplot(111)
         ax.set_axis_off()
 
+        # aristas del árbol
         for u, v in tree_g.get_edgelist():
             x1, y1 = coords[u]
             x2, y2 = coords[v]
@@ -756,6 +836,7 @@ class FletGraphApp:
             sx2, sy2 = x2 - ux * r, y2 - uy * r
             ax.plot([sx1, sx2], [sy1, sy2], color="black", linewidth=1.8)
 
+        # nodos
         for vid in range(tree_g.vcount()):
             x, y = coords[vid]
             circle = Circle((x, y), r, facecolor="white",
@@ -769,12 +850,14 @@ class FletGraphApp:
         ax.set_aspect("equal")
 
         return self._figure_to_base64(fig)
-    
-    # Animación BFS (opcional)
-    
+
+    # ==========================================================
+    #   ANIMACIONES BFS / DFS SOBRE LA MINIATURA DEL GRAFO
+    # ==========================================================
     def _animar_bfs(self, page: ft.Page, res: dict):
         """
         Anima el recorrido BFS en el panel 'Grafo cargado'.
+
         - Va pintando los nodos visitados según res["order"].
         - Al final resalta la ruta más corta start→goal.
         """
@@ -791,7 +874,7 @@ class FletGraphApp:
                 visited=visitados,
             )
             page.update()
-            time.sleep(0.3)   # ajusta velocidad si quieres
+            time.sleep(0.3)   # velocidad de la animación
 
         # 2) Frame final: todos visitados + ruta BFS en rojo
         self.graph_image.src_base64 = self._graph_base64(
@@ -801,52 +884,10 @@ class FletGraphApp:
         )
         page.update()
 
-    def run_bfs_campus(self, page: ft.Page):
-        if not self.grafo or not self.start_dd.value:
-            return
-
-        start = self.start_dd.value
-
-        # 1) BFS completo desde start (no paramos en la primera salida)
-        res = self.grafo.bfs(start, goal=None)
-
-        # 2) Detectar salidas automáticamente
-        salidas = self.grafo.nodos_salida(prefijo="Salida")
-        salidas_reach = [s for s in salidas if s in res["distances"]]
-
-        if not salidas_reach:
-            page.snack_bar = ft.SnackBar(
-                ft.Text("No se encontró ninguna salida alcanzable desde el nodo de inicio.")
-            )
-            page.snack_bar.open = True
-            page.update()
-            return
-
-        # 3) Escoger la salida más cercana (distancia mínima)
-        salida_cercana = min(salidas_reach, key=lambda s: res["distances"][s])
-
-        # 4) Reconstruir ruta hacia esa salida
-        ruta = self.grafo._reconstruir_camino(res["parents"], start, salida_cercana)
-
-        # 5) Guardar información para mostrar / dibujar árbol
-        res["start"] = start
-        res["goal"] = salida_cercana
-        res["path"] = ruta
-        self.bfs_result = res
-
-        # 6) ANIMACIÓN en el grafo cargado
-        self._animar_bfs(page, res)
-
-        # 7) Panel de texto + árbol BFS en la derecha
-        self.show_bfs_info(page, res)
-        self.update_tree_image(page, res, algorithm="bfs")
-
-    
-    # Animación DFS (opcional)
-    
     def _animar_dfs(self, page: ft.Page, res: dict):
         """
         Anima el recorrido DFS en el panel 'Grafo cargado'.
+
         - Va pintando nodos visitados según res["order"].
         - Al final resalta la ruta DFS start→goal.
         """
@@ -873,121 +914,27 @@ class FletGraphApp:
         )
         page.update()
 
-    def run_dfs_campus(self, page: ft.Page):
-        if not self.grafo or not self.start_dd.value:
-            return
-
-        start = self.start_dd.value
-
-        # Usamos BFS solo para elegir la salida más cercana
-        bfs_res = self.grafo.bfs(start, goal=None)
-        salidas = self.grafo.nodos_salida(prefijo="Salida")
-        salidas_reach = [s for s in salidas if s in bfs_res["distances"]]
-
-        if not salidas_reach:
-            page.snack_bar = ft.SnackBar(
-                ft.Text("No se encontró ninguna salida alcanzable desde el nodo de inicio.")
-            )
-            page.snack_bar.open = True
-            page.update()
-            return
-
-        salida_cercana = min(salidas_reach, key=lambda s: bfs_res["distances"][s])
-
-        # DFS con esa salida como goal
-        res = self.grafo.dfs(start, goal=salida_cercana)
-        res["start"] = start
-        res["goal"] = salida_cercana
-        self.dfs_result = res
-
-        # ANIMACIÓN en el grafo cargado
-        self._animar_dfs(page, res)
-
-        # Panel de texto + árbol DFS
-        self.show_dfs_info(page, res)
-        self.update_tree_image(page, res, algorithm="dfs")
-
-
-    # ---------- versiones pequeñas para la pantalla principal ----------
+    # ==========================================================
+    #   ACTUALIZAR MINIATURAS (sin animación)
+    # ==========================================================
     def update_graph_image(self, page: ft.Page):
+        """Dibuja el grafo sin animación (cuando se carga el archivo)."""
         if not self.graph_image:
             return
         self.graph_image.src_base64 = self._graph_base64(figsize=(4, 3))
         page.update()
 
     def update_tree_image(self, page: ft.Page, res: dict, algorithm: str):
+        """Dibuja la miniatura del árbol BFS/DFS."""
         if not self.tree_image:
             return
         self.tree_image.src_base64 = self._tree_base64(res, figsize=(4, 3))
         page.update()
 
-    # ==========================================================
-    #   DIÁLOGOS: VER GRAFO / ÁRBOL EN GRANDE
-    # ==========================================================
-    def _close_dialog(self, e: ft.ControlEvent):
-        page = e.page
-        if page.dialog:
-            page.dialog.open = False
-            page.update()
 
-    def show_graph_dialog(self, e: ft.ControlEvent):
-        page = e.page
-
-        if not self.grafo:
-            page.snack_bar = ft.SnackBar(
-                ft.Text("Grafo aún no cargado. Carga un archivo .txt primero.")
-            )
-            page.snack_bar.open = True
-            page.update()
-            return
-
-        img = ft.Image(width=900, height=600, fit=ft.ImageFit.CONTAIN)
-        img.src_base64 = self._graph_base64(figsize=(8, 6))
-
-        dlg = ft.AlertDialog(
-            title=ft.Text("Grafo del campus"),
-            content=img,
-            actions=[
-                ft.TextButton("Cerrar", on_click=self._close_dialog)
-            ],
-            actions_alignment=ft.MainAxisAlignment.END,
-        )
-
-        page.dialog = dlg
-        dlg.open = True
-        page.update()
-
-    def show_tree_dialog(self, e: ft.ControlEvent):
-        page = e.page
-
-        res = self.bfs_result or self.dfs_result
-        if not res:
-            page.snack_bar = ft.SnackBar(
-                ft.Text("Árbol aún no cargado. Ejecuta BFS o DFS primero.")
-            )
-            page.snack_bar.open = True
-            page.update()
-            return
-
-        img = ft.Image(width=900, height=600, fit=ft.ImageFit.CONTAIN)
-        img.src_base64 = self._tree_base64(res, figsize=(8, 6))
-
-        dlg = ft.AlertDialog(
-            title=ft.Text("Árbol BFS/DFS"),
-            content=img,
-            actions=[
-                ft.TextButton("Cerrar", on_click=self._close_dialog)
-            ],
-            actions_alignment=ft.MainAxisAlignment.END,
-        )
-
-        page.dialog = dlg
-        dlg.open = True
-        page.update()
-
-
-
-
+# ----------------------------------------------------------
+#  PUNTO DE ENTRADA PARA FLET
+# ----------------------------------------------------------
 def main(page: ft.Page):
     app = FletGraphApp()
     app.main(page)
