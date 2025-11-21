@@ -215,3 +215,29 @@ class Grafo:
 
         except Exception as e:
             raise Exception(f"Error al leer el archivo {ruta}: {e}")
+        
+        
+    # ---------- Utilidades de análisis de la estructura del grafo ----------
+
+    def grado(self, id_nodo):
+        """
+        Devuelve el grado (número de vecinos) de un nodo.
+        """
+        return len(self._adyacencia.get(id_nodo, []))
+
+    def nodos_hoja(self):
+        """
+        Nodos con grado 1 (típicamente extremos de pasillos).
+        """
+        return [n for n in self._adyacencia if self.grado(n) == 1]
+
+    def nodos_salida(self, prefijo="Salida"):
+        """
+        Devuelve los nodos considerados 'salidas' en el campus.
+
+        Estrategia:
+        - Deben ser hojas (grado 1).
+        - Su nombre debe empezar por el prefijo (por defecto 'Salida').
+        """
+        hojas = self.nodos_hoja()
+        return [n for n in hojas if str(n).startswith(prefijo)]

@@ -179,7 +179,7 @@ class GraphApp:
     #   Dibujo del grafo principal
     # ==========================================================
 
-    def _normalized_layout(self, layout):
+    def normalized_layout(self, layout):
         if layout is None or len(layout) == 0:
             return []
 

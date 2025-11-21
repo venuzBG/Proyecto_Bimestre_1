@@ -1,6 +1,21 @@
-# Campus EPN (modelo pequeño)
-Aula_101,Hall
-Aula_102,Hall
-Hall,Pasillo
-Pasillo,Laboratorio
-Pasillo,Salida
+# Campus universitario con 15 nodos y 3 salidas
+
+Aula_A1,Pasillo_A
+Aula_A2,Pasillo_A
+Laboratorio_Quimica,Pasillo_A
+
+Pasillo_A,Hall_Principal
+Pasillo_B,Hall_Principal
+Biblioteca,Hall_Principal
+
+Aula_B1,Pasillo_B
+Aula_B2,Pasillo_B
+Cafeteria,Pasillo_B
+
+Hall_Principal,Pasillo_C
+Laboratorio_Informatica,Pasillo_C
+Auditorio,Pasillo_C
+
+Pasillo_C,Salida_Norte
+Pasillo_C,Salida_Sur
+Pasillo_B,Salida_Este
