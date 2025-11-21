@@ -1,130 +1,68 @@
-import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
-from pathlib import Path
+import base64
+import io
 
+import flet as ft
 import igraph as ig
+import matplotlib.pyplot as plt
+import time
+import matplotlib.pyplot as plt  # ya lo usábamos para la ventana grande
+
 from matplotlib.figure import Figure
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.patches import Circle
 
 from src.grafos.grafo import Grafo
 
 
-class GraphApp:
+class FletGraphApp:
     """
-    App principal:
-      - Usa tu TDA Grafo (Nodo, Arista, Grafo) para el modelo y BFS/DFS.
-      - Usa igraph SOLO para el layout y dibujo.
-      - Carga por defecto Campus.txt (si existe).
-      - Muestra árbol BFS/DFS con métricas: distancias, padres, ruta, deepest_path, tiempo.
+    Interfaz Flet para el proyecto de rutas en grafos.
+
+    - Usa el TDA Grafo (Nodo, Arista, Grafo) para cargar el grafo y
+      ejecutar BFS / DFS.
+    - Usa igraph + matplotlib para DIBUJAR:
+        * el grafo original
+        * el árbol BFS / DFS
+    - Muestra los resultados (distancias, padres, rutas, deepest_path, tiempo, etc.)
+      en un panel con scroll.
     """
 
-    def __init__(self, root: tk.Tk):
-        self.root = root
-        self.root.title("Rutas en Grafos - BFS y DFS")
-        self.root.geometry("900x600")
+    def __init__(self):
+        self.grafo: Grafo | None = None
+        self.bfs_result = None
+        self.dfs_result = None
 
-        # Estilos
-        style = ttk.Style(self.root)
-        try:
-            style.theme_use("clam")
-        except tk.TclError:
-            pass
-        style.configure("TButton", padding=6, font=("Segoe UI", 10))
-        style.configure("TLabel", font=("Segoe UI", 10))
-
-        # ==== Modelo (TDA Grafo) ====
-        self.grafo = self._cargar_grafo_por_defecto()
-
-        # ==== igraph auxiliar ====
-        self.ig_graph = None
-        self.name_to_idx = {}
-        self.idx_to_name = {}
-        self.layout = None
-
-        # Colores nodos
-        self.base_color = "#ffc078"      # naranja suave
-        self.node_colors = []
-
-        # Resultados recorridos
-        self.last_bfs = None   # dict con resultado BFS
-        self.last_dfs = None   # dict con resultado DFS
-        self.last_algorithm = None  # "bfs" o "dfs"
-
-        # Construir UI
-        self._build_ui()
-
-        # Sincronizar igraph y dibujar
-        self._sync_igraph_from_model()
-        self._draw_graph()
-
-    # ==========================================================
-    #   Carga de grafo
+        # Controles que se rellenan en main()
+        self.start_dd: ft.Dropdown | None = None
+        self.run_bfs_btn: ft.ElevatedButton | None = None
+        self.run_dfs_btn: ft.ElevatedButton | None = None
+        self.info_panel: ft.Container | None = None
+        self.graph_image: ft.Image | None = None
+        self.tree_image: ft.Image | None = None
+    
+        # ==========================================================
+    #   NUEVAS VENTANAS GRANDES (MATPLOTLIB) PARA GRAFO Y ÁRBOL
     # ==========================================================
 
-    def _cargar_grafo_por_defecto(self) -> Grafo:
+    def show_graph_window(self, e: ft.ControlEvent):
         """
-        Intenta cargar Campus.txt de la raíz del proyecto.
-        Si no existe, usa el grafo de ejemplo pequeño.
+        Abre una ventana nueva de Matplotlib con el grafo grande.
+        Si hay resultados de BFS/DFS, resalta:
+          - ruta BFS en rojo 'tomato'
+          - ruta DFS en celeste
         """
-        project_root = Path(__file__).resolve().parents[2]
-        campus_file = project_root / "Campus.txt"
-
-        if campus_file.exists():
-            try:
-                return Grafo.desde_archivo(str(campus_file), dirigido=False, separador=",")
-            except Exception as e:
-                messagebox.showwarning(
-                    "Error cargando Campus.txt",
-                    f"No se pudo leer Campus.txt:\n{e}\nSe usará el grafo de ejemplo."
-                )
-
-        # fallback
-        return self._construir_grafo_ejemplo()
-
-    def _construir_grafo_ejemplo(self) -> Grafo:
-        g = Grafo(dirigido=False)
-        g.add_arista("Aula_101", "Hall")
-        g.add_arista("Aula_102", "Hall")
-        g.add_arista("Hall", "Pasillo")
-        g.add_arista("Pasillo", "Laboratorio")
-        g.add_arista("Pasillo", "Salida")
-        return g
-
-    def _load_graph_from_file(self, path: str):
-        try:
-            self.grafo = Grafo.desde_archivo(path, dirigido=False, separador=",")
-        except Exception as e:
-            messagebox.showerror("Error al cargar grafo", str(e))
+        if not self.grafo:
+            # Nada cargado: no hacemos nada (o podrías imprimir un print)
             return
 
-        self._sync_igraph_from_model()
-        self._draw_graph()
-        self.last_bfs = self.last_dfs = None
-        self.last_algorithm = None
-        messagebox.showinfo("Grafo cargado", f"Grafo cargado desde:\n{path}")
-
-    # ==========================================================
-    #   Conversión a igraph
-    # ==========================================================
-
-    def _sync_igraph_from_model(self):
+        # --- Construir grafo de igraph como en _graph_base64 ---
         nombres = self.grafo.nodos()
-        if not nombres:
-            self.ig_graph = ig.Graph()
-            self.name_to_idx = {}
-            self.idx_to_name = {}
-            self.layout = None
-            self.node_colors = []
-            return
-
-        self.name_to_idx = {name: i for i, name in enumerate(nombres)}
-        self.idx_to_name = {i: name for name, i in self.name_to_idx.items()}
+        name_to_idx = {name: i for i, name in enumerate(nombres)}
 
         edges = set()
         for u in self.grafo.nodos():
             for v, _ in self.grafo.vecinos(u):
-                par = tuple(sorted((self.name_to_idx[u], self.name_to_idx[v])))
+                par = tuple(sorted((name_to_idx[u], name_to_idx[v])))
                 edges.add(par)
 
         g_ig = ig.Graph()
@@ -133,267 +71,116 @@ class GraphApp:
             g_ig.add_edges(list(edges))
         g_ig.vs["label"] = nombres
 
-        self.ig_graph = g_ig
-        self.layout = self.ig_graph.layout("kk")
-        self.node_colors = [self.base_color] * self.ig_graph.vcount()
+        layout = g_ig.layout("kk")
+        coords = self._normalized_layout(layout)
 
-    # ==========================================================
-    #   UI
-    # ==========================================================
+        # --- Rutas BFS / DFS (lista de pares de nodos) ---
+        bfs_edges = set()
+        dfs_edges = set()
+        bfs_nodes = set()
+        dfs_nodes = set()
 
-    def _build_ui(self):
-        # Menú
-        menubar = tk.Menu(self.root)
-        menu_archivo = tk.Menu(menubar, tearoff=0)
-        menu_archivo.add_command(label="Cargar grafo...", command=self._on_load_graph)
-        menu_archivo.add_separator()
-        menu_archivo.add_command(label="Salir", command=self.root.quit)
-        menubar.add_cascade(label="Archivo", menu=menu_archivo)
-        self.root.config(menu=menubar)
+        if self.bfs_result and self.bfs_result.get("path"):
+            path = self.bfs_result["path"]
+            bfs_nodes = set(path)
+            for i in range(len(path) - 1):
+                a, b = path[i], path[i + 1]
+                pa = name_to_idx[a]
+                pb = name_to_idx[b]
+                bfs_edges.add(tuple(sorted((pa, pb))))
 
-        main_frame = ttk.Frame(self.root, padding=10)
-        main_frame.pack(fill=tk.BOTH, expand=True)
+        if self.dfs_result and self.dfs_result.get("dfs_path"):
+            path = self.dfs_result["dfs_path"]
+            dfs_nodes = set(path)
+            for i in range(len(path) - 1):
+                a, b = path[i], path[i + 1]
+                pa = name_to_idx[a]
+                pb = name_to_idx[b]
+                dfs_edges.add(tuple(sorted((pa, pb))))
 
-        # Figura para grafo principal
-        self.fig = Figure(figsize=(6, 4), dpi=100)
-        self.ax = self.fig.add_subplot(111)
-        self.ax.set_axis_off()
+        # --- Dibujar en una ventana nueva ---
+        fig, ax = plt.subplots(figsize=(8, 6), dpi=100)
+        ax.set_axis_off()
 
-        self.canvas_fig = FigureCanvasTkAgg(self.fig, master=main_frame)
-        self.canvas_fig.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        r = 0.035
 
-        # Controles abajo
-        controls = ttk.Frame(main_frame)
-        controls.pack(side=tk.BOTTOM, fill=tk.X, pady=(10, 0))
-
-        ttk.Label(controls, text="Controles:").pack(side=tk.LEFT, padx=(0, 10))
-
-        ttk.Button(controls, text="BFS", width=10,
-                   command=lambda: self._ask_start_goal("bfs")).pack(side=tk.LEFT, padx=5)
-        ttk.Button(controls, text="DFS", width=10,
-                   command=lambda: self._ask_start_goal("dfs")).pack(side=tk.LEFT, padx=5)
-        ttk.Button(controls, text="Ver árbol", width=12,
-                   command=self._on_tree_clicked).pack(side=tk.LEFT, padx=5)
-
-    # ==========================================================
-    #   Dibujo del grafo principal
-    # ==========================================================
-
-    def normalized_layout(self, layout):
-        if layout is None or len(layout) == 0:
-            return []
-
-        xs = [coord[0] for coord in layout]
-        ys = [coord[1] for coord in layout]
-        min_x, max_x = min(xs), max(xs)
-        min_y, max_y = min(ys), max(ys)
-
-        def nx(x): return (x - min_x) / (max_x - min_x + 1e-9)
-        def ny(y): return (y - min_y) / (max_y - min_y + 1e-9)
-
-        return [(nx(x), ny(y)) for x, y in layout]
-
-    def _draw_graph(self):
-        self.ax.clear()
-        self.ax.set_axis_off()
-
-        if self.ig_graph is None or self.ig_graph.vcount() == 0:
-            self.canvas_fig.draw()
-            return
-
-        coords = self._normalized_layout(self.layout)
-        r = 0.04  # radio
-
-        # Aristas: desde borde a borde
-        for (u, v) in self.ig_graph.get_edgelist():
+        # 1) Todas las aristas en gris
+        for u, v in g_ig.get_edgelist():
             x1, y1 = coords[u]
             x2, y2 = coords[v]
-            dx, dy = x2 - x1, y2 - y1
-            length = (dx**2 + dy**2) ** 0.5 or 1.0
-            ux, uy = dx / length, dy / length
+            ax.plot([x1, x2], [y1, y2], color="gray", linewidth=1.5, zorder=1)
 
-            sx1, sy1 = x1 + ux * r, y1 + uy * r
-            sx2, sy2 = x2 - ux * r, y2 - uy * r
+        # 2) Aristas BFS en rojo tomate
+        for u, v in bfs_edges:
+            x1, y1 = coords[u]
+            x2, y2 = coords[v]
+            ax.plot([x1, x2], [y1, y2], color="tomato", linewidth=3, zorder=2)
 
-            self.ax.plot([sx1, sx2], [sy1, sy2], color="#495057", linewidth=2)
+        # 3) Aristas DFS en celeste
+        for u, v in dfs_edges:
+            x1, y1 = coords[u]
+            x2, y2 = coords[v]
+            ax.plot([x1, x2], [y1, y2], color="#4dabf7", linewidth=2.5, zorder=3)
 
-        # Nodos
-        for vid in range(self.ig_graph.vcount()):
+        # 4) Nodos
+        for vid in range(g_ig.vcount()):
             x, y = coords[vid]
-            circle = Circle((x, y), r,
-                            facecolor=self.node_colors[vid],
-                            edgecolor="#343a40", linewidth=2)
-            self.ax.add_patch(circle)
-            label = self.ig_graph.vs[vid]["label"]
-            self.ax.text(x, y, label, ha="center", va="center", fontsize=9)
+            name = g_ig.vs[vid]["label"]
 
-        self.ax.set_xlim(-0.1, 1.1)
-        self.ax.set_ylim(-0.1, 1.1)
-        self.ax.set_aspect("equal")
-        self.canvas_fig.draw()
+            # Color base
+            face = "#8ce99a"   # verde suave
 
-    def _reset_colors(self):
-        self.node_colors = [self.base_color] * len(self.node_colors)
-        self._draw_graph()
+            # Si pertenece a BFS o DFS cambiamos color
+            if name in bfs_nodes:
+                face = "tomato"
+            if name in dfs_nodes:
+                # si está en DFS, lo pintamos celeste (pisando el anterior)
+                face = "#4dabf7"
 
-    def _set_node_color(self, node_name, color):
-        idx = self.name_to_idx.get(node_name)
-        if idx is not None:
-            self.node_colors[idx] = color
+            circ = Circle((x, y), r, facecolor=face, edgecolor="black", linewidth=1.8)
+            ax.add_patch(circ)
+            ax.text(x, y, name, ha="center", va="center", fontsize=10, zorder=4)
 
-    # ==========================================================
-    #   Eventos de menú / botones
-    # ==========================================================
+        ax.set_xlim(-0.1, 1.1)
+        ax.set_ylim(-0.1, 1.1)
+        ax.set_aspect("equal")
 
-    def _on_load_graph(self):
-        path = filedialog.askopenfilename(
-            title="Seleccionar archivo de grafo",
-            filetypes=[("Texto", "*.txt"), ("Todos", "*.*")]
-        )
-        if not path:
-            return
-        self._load_graph_from_file(path)
+        plt.title("Grafo")
+        plt.tight_layout()
+        plt.show()
 
-    def _on_tree_clicked(self):
-        if self.last_algorithm == "bfs" and self.last_bfs is not None:
-            self._show_tree_window(self.last_bfs, "bfs")
-        elif self.last_algorithm == "dfs" and self.last_dfs is not None:
-            self._show_tree_window(self.last_dfs, "dfs")
-        else:
-            messagebox.showinfo("Sin recorrido", "Ejecuta primero BFS o DFS.")
-            return
-
-    # ==========================================================
-    #   Selección de start y goal
-    # ==========================================================
-
-    def _ask_start_goal(self, algorithm: str):
-        window = tk.Toplevel(self.root)
-        window.title(f"Parámetros {algorithm.upper()}")
-        window.resizable(False, False)
-
-        frame = ttk.Frame(window, padding=10)
-        frame.pack(fill=tk.BOTH, expand=True)
-
-        nodos = self.grafo.nodos()
-        if not nodos:
-            messagebox.showerror("Error", "El grafo no tiene nodos.")
-            window.destroy()
-            return
-
-        start_var = tk.StringVar(value=nodos[0])
-        goal_var = tk.StringVar(value=nodos[0])
-
-        ttk.Label(frame, text="Nodo inicio (start):").pack(anchor="w")
-        ttk.Combobox(frame, textvariable=start_var, values=nodos,
-                     state="readonly", width=20).pack(pady=(0, 5))
-
-        ttk.Label(frame, text="Nodo objetivo (goal/finish):").pack(anchor="w")
-        ttk.Combobox(frame, textvariable=goal_var, values=nodos,
-                     state="readonly", width=20).pack(pady=(0, 5))
-
-        btn_frame = ttk.Frame(frame)
-        btn_frame.pack(pady=10)
-
-        def iniciar():
-            start = start_var.get()
-            goal = goal_var.get()
-            window.destroy()
-            if algorithm == "bfs":
-                self._run_bfs(start, goal)
-            else:
-                self._run_dfs(start, goal)
-
-        def cancelar():
-            window.destroy()
-
-        ttk.Button(btn_frame, text="Iniciar", width=10,
-                   command=iniciar).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="Cancelar", width=10,
-                   command=cancelar).pack(side=tk.LEFT, padx=5)
-
-    # ==========================================================
-    #   BFS / DFS + animación
-    # ==========================================================
-
-    def _run_bfs(self, start, goal):
-        try:
-            res = self.grafo.bfs(start, goal)
-        except ValueError as e:
-            messagebox.showerror("Error BFS", str(e))
-            return
-
-        res["start"] = start
-        res["goal"] = goal
-        self.last_bfs = res
-        self.last_algorithm = "bfs"
-
-        self._reset_colors()
-        self._set_node_color(start, "#0d6efd")  # azul start
-        self._draw_graph()
-
-        order = res["order"]
-        self._animate_visit(order, 0, "#51cf66")  # verde BFS
-
-    def _run_dfs(self, start, goal):
-        try:
-            res = self.grafo.dfs(start, goal)
-        except ValueError as e:
-            messagebox.showerror("Error DFS", str(e))
-            return
-
-        res["start"] = start
-        res["goal"] = goal
-        self.last_dfs = res
-        self.last_algorithm = "dfs"
-
-        self._reset_colors()
-        self._set_node_color(start, "#0d6efd")  # azul start
-        self._draw_graph()
-
-        order = res["order"]
-        # 💠 DFS en celeste (como pediste)
-        self._animate_visit(order, 0, "#4dabf7")
-
-    def _animate_visit(self, order, index, color):
-        if index >= len(order):
-            return
-        node_name = order[index]
-        self._set_node_color(node_name, color)
-        self._draw_graph()
-        self.root.after(500, lambda: self._animate_visit(order, index + 1, color))
-
-    # ==========================================================
-    #   Ventana del árbol + métricas BFS / DFS
-    # ==========================================================
-
-    def _show_tree_window(self, result: dict, algorithm: str):
+    def show_tree_window(self, e: ft.ControlEvent):
         """
-        Dibuja el árbol (BFS/DFS) y muestra:
-          - tiempo
-          - distancias (solo BFS)
-          - padres
-          - ruta más corta (BFS) / ruta DFS
-          - deepest_path (DFS)
+        Abre una ventana nueva de Matplotlib con el árbol.
+        Usa:
+          - BFS si existe resultado BFS
+          - si no, DFS
+        Resalta el camino relevante (BFS/DFS) igual que el grafo.
         """
-        parents = result["parents"]
+        # Usamos BFS si existe; si no, DFS
+        res = self.bfs_result or self.dfs_result
+        if not res:
+            return
+
+        parents = res.get("parents")
+        if not parents:
+            return
 
         # raíz
         root_node = None
-        for node, padre in parents.items():
-            if padre is None:
-                root_node = node
+        for n, p in parents.items():
+            if p is None:
+                root_node = n
                 break
         if root_node is None:
-            messagebox.showerror("Error", "No se pudo determinar la raíz del árbol.")
             return
 
         nodes = list(parents.keys())
         name_to_idx = {name: i for i, name in enumerate(nodes)}
         edges = []
-        for nodo, padre in parents.items():
-            if padre is not None:
-                edges.append((name_to_idx[padre], name_to_idx[nodo]))
+        for n, p in parents.items():
+            if p is not None:
+                edges.append((name_to_idx[p], name_to_idx[n]))
 
         tree_g = ig.Graph()
         tree_g.add_vertices(len(nodes))
@@ -403,43 +190,572 @@ class GraphApp:
 
         layout = tree_g.layout("tree", root=[name_to_idx[root_node]])
         coords = self._normalized_layout(layout)
-        # 🔁 Invertimos Y para que la raíz quede arriba, no abajo
-        coords = [(x, 1 - y) for x, y in coords]
+        coords = [(x, 1 - y) for x, y in coords]  # raíz arriba
 
-        # Ventana
-        if algorithm == "bfs":
-            title = "Árbol BFS"
+        # Camino BFS o DFS
+        bfs_nodes = set()
+        dfs_nodes = set()
+        bfs_edges = set()
+        dfs_edges = set()
+
+        if self.bfs_result and self.bfs_result.get("path"):
+            path = self.bfs_result["path"]
+            bfs_nodes = set(path)
+            for i in range(len(path) - 1):
+                a, b = path[i], path[i + 1]
+                pa = name_to_idx.get(a)
+                pb = name_to_idx.get(b)
+                if pa is not None and pb is not None:
+                    bfs_edges.add((pa, pb))
+
+        if self.dfs_result and self.dfs_result.get("dfs_path"):
+            path = self.dfs_result["dfs_path"]
+            dfs_nodes = set(path)
+            for i in range(len(path) - 1):
+                a, b = path[i], path[i + 1]
+                pa = name_to_idx.get(a)
+                pb = name_to_idx.get(b)
+                if pa is not None and pb is not None:
+                    dfs_edges.add((pa, pb))
+
+        fig, ax = plt.subplots(figsize=(8, 6), dpi=100)
+        ax.set_axis_off()
+        r = 0.045
+
+        # 1) Aristas normales
+        for u, v in tree_g.get_edgelist():
+            x1, y1 = coords[u]
+            x2, y2 = coords[v]
+            ax.plot([x1, x2], [y1, y2], color="black", linewidth=1.5, zorder=1)
+
+        # 2) Camino BFS (rojo)
+        for u, v in bfs_edges:
+            x1, y1 = coords[u]
+            x2, y2 = coords[v]
+            ax.plot([x1, x2], [y1, y2], color="tomato", linewidth=3, zorder=2)
+
+        # 3) Camino DFS (celeste)
+        for u, v in dfs_edges:
+            x1, y1 = coords[u]
+            x2, y2 = coords[v]
+            ax.plot([x1, x2], [y1, y2], color="#4dabf7", linewidth=2.5, zorder=3)
+
+        # 4) Nodos
+        for vid in range(tree_g.vcount()):
+            x, y = coords[vid]
+            name = tree_g.vs[vid]["label"]
+
+            face = "white"  # base
+
+            if name in bfs_nodes:
+                face = "tomato"
+            if name in dfs_nodes:
+                face = "#4dabf7"
+
+            circ = Circle((x, y), r, facecolor=face, edgecolor="black", linewidth=1.8)
+            ax.add_patch(circ)
+            ax.text(x, y, name, ha="center", va="center", fontsize=10, zorder=4)
+
+        ax.set_xlim(-0.1, 1.1)
+        ax.set_ylim(-0.1, 1.1)
+        ax.set_aspect("equal")
+
+        titulo = "Árbol "
+        plt.title(titulo)
+        plt.tight_layout()
+        plt.show()
+
+    
+    # ==========================================================
+    #   FUNCIÓN PRINCIPAL DE FLET
+    # ==========================================================
+    def main(self, page: ft.Page):
+        page.title = "Rutas en Grafos - BFS y DFS (Flet)"
+        page.horizontal_alignment = "center"
+        page.vertical_alignment = "start"
+        page.padding = 20
+        page.theme_mode = ft.ThemeMode.LIGHT
+
+        # ---------- Selector de archivo para el grafo ----------
+        file_picker = ft.FilePicker(
+            on_result=lambda e: self.on_file_selected(e, page)
+        )
+        page.overlay.append(file_picker)
+
+        load_btn = ft.ElevatedButton(
+            "Cargar grafo (.txt)",
+            icon=ft.Icons.UPLOAD_FILE,
+            on_click=lambda _: file_picker.pick_files(
+                allow_multiple=False,
+                allowed_extensions=["txt"],
+            ),
+        )
+
+        # ---------- Controles para BFS/DFS ----------
+        self.start_dd = ft.Dropdown(
+            label="Nodo inicio (start)",
+            options=[],
+            disabled=True,
+            width=250,
+        )
+
+        self.run_bfs_btn = ft.ElevatedButton(
+            "Ejecutar BFS (campus)",
+            icon=ft.Icons.TRAVEL_EXPLORE,
+            disabled=True,
+            on_click=lambda _: self.run_bfs_campus(page),
+        )
+
+        self.run_dfs_btn = ft.ElevatedButton(
+            "Ejecutar DFS (campus)",
+            icon=ft.Icons.FUNCTIONS,
+            disabled=True,
+            on_click=lambda _: self.run_dfs_campus(page),
+        )
+
+        # ---------- Imágenes del grafo y árbol (miniaturas) ----------
+        self.graph_image = ft.Image(
+            width=380,
+            height=260,
+            fit=ft.ImageFit.CONTAIN,
+        )
+
+        self.tree_image = ft.Image(
+            width=380,
+            height=260,
+            fit=ft.ImageFit.CONTAIN,
+        )
+
+        # ---------- Panel de resultados con scroll ----------
+        self.info_panel = ft.Container(
+            content=ft.Column([], scroll=ft.ScrollMode.AUTO),
+            height=220,
+            width=800,
+            bgcolor=ft.Colors.GREY_100,
+            border_radius=10,
+            padding=10,
+        )
+
+        # ---------- Layout general ----------
+        page.add(
+            ft.Column(
+                controls=[
+                    load_btn,
+                    ft.Row(
+                        [self.start_dd, self.run_bfs_btn, self.run_dfs_btn],
+                        spacing=10,
+                    ),
+                    ft.Row(
+                        [
+                            ft.Column(
+                                [
+                                    ft.Text("Grafo cargado", weight=ft.FontWeight.BOLD),
+                                    self.graph_image,
+                                    ft.TextButton(
+                                        "Ver grafo en grande",
+                                        on_click=self.show_graph_window,
+                                    ),
+                                ],
+                                spacing=5,
+                            ),
+                            ft.Column(
+                                [
+                                    ft.Text("Árbol BFS/DFS", weight=ft.FontWeight.BOLD),
+                                    self.tree_image,
+                                    ft.TextButton(
+                                        "Ver árbol en grande",
+                                        on_click=self.show_tree_window,
+                                    ),
+                                ],
+                                spacing=5,
+                            ),
+                        ],
+                        spacing=20,
+                    ),
+                    ft.Text(
+                        "Resultados del algoritmo:",
+                        weight=ft.FontWeight.BOLD,
+                        size=14,
+                    ),
+                    self.info_panel,
+                ],
+                spacing=20,
+                width=900,
+            )
+        )
+
+    # ==========================================================
+    #   CALLBACK: CUANDO SE SELECCIONA EL ARCHIVO DEL GRAFO
+    # ==========================================================
+    def on_file_selected(self, e: ft.FilePickerResultEvent, page: ft.Page):
+        if not e.files:
+            return
+
+        path = e.files[0].path
+
+        try:
+            self.grafo = Grafo.desde_archivo(path, dirigido=False, separador=",")
+        except Exception as ex:
+            page.snack_bar = ft.SnackBar(ft.Text(f"Error al cargar grafo: {ex}"))
+            page.snack_bar.open = True
+            page.update()
+            return
+
+        # Llenar dropdown de nodos de inicio
+        nodos = self.grafo.nodos()
+        self.start_dd.options = [ft.dropdown.Option(n) for n in nodos]
+        self.start_dd.value = nodos[0] if nodos else None
+        self.start_dd.disabled = False
+
+        # Habilitar botones
+        self.run_bfs_btn.disabled = False
+        self.run_dfs_btn.disabled = False
+
+        # Dibujar grafo miniatura
+        self.update_graph_image(page)
+
+        page.snack_bar = ft.SnackBar(ft.Text(f"Grafo cargado desde: {path}"))
+        page.snack_bar.open = True
+        page.update()
+
+    # ==========================================================
+    #   EJECUCIÓN BFS / DFS EN MODO CAMPUS
+    # ==========================================================
+    def run_bfs_campus(self, page: ft.Page):
+        if not self.grafo or not self.start_dd.value:
+            return
+
+        start = self.start_dd.value
+
+        res = self.grafo.bfs(start, goal=None)
+
+        salidas = self.grafo.nodos_salida(prefijo="Salida")
+        salidas_reach = [s for s in salidas if s in res["distances"]]
+
+        if not salidas_reach:
+            page.snack_bar = ft.SnackBar(
+                ft.Text("No se encontró ninguna salida alcanzable desde el nodo de inicio.")
+            )
+            page.snack_bar.open = True
+            page.update()
+            return
+
+        salida_cercana = min(salidas_reach, key=lambda s: res["distances"][s])
+        ruta = self.grafo._reconstruir_camino(res["parents"], start, salida_cercana)
+
+        res["start"] = start
+        res["goal"] = salida_cercana
+        res["path"] = ruta
+        self.bfs_result = res
+
+        self.show_bfs_info(page, res)
+        self.update_tree_image(page, res, algorithm="bfs")
+
+    def run_dfs_campus(self, page: ft.Page):
+        if not self.grafo or not self.start_dd.value:
+            return
+
+        start = self.start_dd.value
+
+        bfs_res = self.grafo.bfs(start, goal=None)
+        salidas = self.grafo.nodos_salida(prefijo="Salida")
+        salidas_reach = [s for s in salidas if s in bfs_res["distances"]]
+
+        if not salidas_reach:
+            page.snack_bar = ft.SnackBar(
+                ft.Text("No se encontró ninguna salida alcanzable desde el nodo de inicio.")
+            )
+            page.snack_bar.open = True
+            page.update()
+            return
+
+        salida_cercana = min(salidas_reach, key=lambda s: bfs_res["distances"][s])
+
+        res = self.grafo.dfs(start, goal=salida_cercana)
+        res["start"] = start
+        res["goal"] = salida_cercana
+        self.dfs_result = res
+
+        self.show_dfs_info(page, res)
+        self.update_tree_image(page, res, algorithm="dfs")
+
+    # ==========================================================
+    #   PANEL DE RESULTADOS (TEXTO CON SCROLL)
+    # ==========================================================
+    def show_bfs_info(self, page: ft.Page, res):
+        start = res["start"]
+        goal = res["goal"]
+        tiempo = res["time"]
+
+        col: ft.Column = self.info_panel.content
+        col.controls.clear()
+
+        col.controls.append(ft.Text("ALGORITMO BFS", weight=ft.FontWeight.BOLD))
+        col.controls.append(ft.Text(f"start = {start}    finish = {goal}"))
+        col.controls.append(ft.Text(f"tiempo de ejecución = {tiempo:.6f} s"))
+        col.controls.append(ft.Text(""))
+
+        col.controls.append(
+            ft.Text(
+                "distancias (nodo → distancia desde start):",
+                weight=ft.FontWeight.BOLD,
+            )
+        )
+        for n, d in res["distances"].items():
+            col.controls.append(ft.Text(f"  {n}: {d}"))
+
+        col.controls.append(ft.Text(""))
+        col.controls.append(
+            ft.Text(
+                "padres (nodo ← padre en árbol BFS):",
+                weight=ft.FontWeight.BOLD,
+            )
+        )
+        for n, p in res["parents"].items():
+            col.controls.append(ft.Text(f"  {n} ← {p}"))
+
+        col.controls.append(ft.Text(""))
+        col.controls.append(
+            ft.Text(
+                "ruta más corta start → finish:",
+                weight=ft.FontWeight.BOLD,
+            )
+        )
+        path = res.get("path")
+        if path is None:
+            col.controls.append(ft.Text("  No existe ruta entre start y goal."))
         else:
-            title = "Árbol DFS"
+            col.controls.append(ft.Text("  " + " -> ".join(path)))
 
-        win = tk.Toplevel(self.root)
-        win.title(title)
-        win.geometry("700x500")
+        page.update()
 
-        frame = ttk.Frame(win)
-        frame.pack(fill=tk.BOTH, expand=True)
+    def show_dfs_info(self, page: ft.Page, res):
+        start = res["start"]
+        goal = res["goal"]
+        tiempo = res["time"]
 
-        # Figura
-        fig = Figure(figsize=(6, 3), dpi=100)
+        col: ft.Column = self.info_panel.content
+        col.controls.clear()
+
+        col.controls.append(ft.Text("ALGORITMO DFS", weight=ft.FontWeight.BOLD))
+        col.controls.append(ft.Text(f"start = {start}    goal = {goal}"))
+        col.controls.append(ft.Text(f"tiempo de ejecución = {tiempo:.6f} s"))
+        col.controls.append(ft.Text(""))
+
+        col.controls.append(
+            ft.Text(
+                "padres (nodo ← padre en árbol DFS):",
+                weight=ft.FontWeight.BOLD,
+            )
+        )
+        for n, p in res["parents"].items():
+            col.controls.append(ft.Text(f"  {n} ← {p}"))
+
+        col.controls.append(ft.Text(""))
+        col.controls.append(
+            ft.Text(
+                "ruta DFS start → goal:",
+                weight=ft.FontWeight.BOLD,
+            )
+        )
+        dfs_path = res.get("dfs_path")
+        if dfs_path is None:
+            col.controls.append(ft.Text("  No existe ruta entre start y goal."))
+        else:
+            col.controls.append(ft.Text("  " + " -> ".join(dfs_path)))
+
+        col.controls.append(ft.Text(""))
+        col.controls.append(
+            ft.Text(
+                "camino de mayor profundidad (deepest_path):",
+                weight=ft.FontWeight.BOLD,
+            )
+        )
+        deepest = res.get("deepest_path")
+        if deepest is None:
+            col.controls.append(
+                ft.Text("  No se pudo determinar el camino más profundo.")
+            )
+        else:
+            col.controls.append(ft.Text("  " + " -> ".join(deepest)))
+
+        page.update()
+
+    # ==========================================================
+    #   DIBUJO DEL GRAFO Y DEL ÁRBOL (IMÁGENES PNG → base64)
+    # ==========================================================
+    @staticmethod
+    def _normalized_layout(layout):
+        xs = [c[0] for c in layout]
+        ys = [c[1] for c in layout]
+        min_x, max_x = min(xs), max(xs)
+        min_y, max_y = min(ys), max(ys)
+
+        def nx(x): return (x - min_x) / (max_x - min_x + 1e-9)
+        def ny(y): return (y - min_y) / (max_y - min_y + 1e-9)
+
+        return [(nx(x), ny(y)) for x, y in layout]
+
+    @staticmethod
+    def _figure_to_base64(fig: Figure) -> str:
+        buf = io.BytesIO()
+        canvas = FigureCanvasAgg(fig)
+        canvas.draw()
+        fig.savefig(buf, format="png", bbox_inches="tight")
+        buf.seek(0)
+        return base64.b64encode(buf.getvalue()).decode("utf-8")
+
+    # ---------- helpers para imágenes ----------
+    def _graph_base64(self, figsize=(4, 3),
+                      visited=None,
+                      bfs_path=None,
+                      dfs_path=None):
+        """
+        Dibuja el grafo del campus y devuelve la imagen en base64.
+
+        visited: conjunto de nodos visitados (BFS/DFS) -> se pintan distinto
+        bfs_path: lista de nodos de la ruta BFS -> rojo "tomato"
+        dfs_path: lista de nodos de la ruta DFS -> celeste
+        """
+        if not self.grafo:
+            return ""
+
+        visited = set(visited or [])
+        bfs_nodes = set(bfs_path or [])
+        dfs_nodes = set(dfs_path or [])
+
+        nombres = self.grafo.nodos()
+        name_to_idx = {name: i for i, name in enumerate(nombres)}
+
+        edges = set()
+        for u in self.grafo.nodos():
+            for v, _ in self.grafo.vecinos(u):
+                par = tuple(sorted((name_to_idx[u], name_to_idx[v])))
+                edges.add(par)
+
+        g_ig = ig.Graph()
+        g_ig.add_vertices(len(nombres))
+        if edges:
+            g_ig.add_edges(list(edges))
+        g_ig.vs["label"] = nombres
+
+        layout = g_ig.layout("kk")
+        coords = self._normalized_layout(layout)
+        r = 0.04
+
+        fig = Figure(figsize=figsize, dpi=100)
         ax = fig.add_subplot(111)
         ax.set_axis_off()
 
-        r = 0.045
+        # --- aristas "normales" ---
+        for u, v in g_ig.get_edgelist():
+            x1, y1 = coords[u]
+            x2, y2 = coords[v]
+            ax.plot([x1, x2], [y1, y2], color="gray", linewidth=1.5, zorder=1)
 
-        # Aristas
+        # --- resaltar ruta BFS ---
+        if bfs_path and len(bfs_path) > 1:
+            for i in range(len(bfs_path) - 1):
+                a, b = bfs_path[i], bfs_path[i + 1]
+                u, v = name_to_idx[a], name_to_idx[b]
+                x1, y1 = coords[u]
+                x2, y2 = coords[v]
+                ax.plot([x1, x2], [y1, y2],
+                        color="tomato", linewidth=3, zorder=3)
+
+        # --- resaltar ruta DFS ---
+        if dfs_path and len(dfs_path) > 1:
+            for i in range(len(dfs_path) - 1):
+                a, b = dfs_path[i], dfs_path[i + 1]
+                u, v = name_to_idx[a], name_to_idx[b]
+                x1, y1 = coords[u]
+                x2, y2 = coords[v]
+                ax.plot([x1, x2], [y1, y2],
+                        color="#4dabf7", linewidth=2.5, zorder=4)
+
+        # --- nodos ---
+        for vid in range(g_ig.vcount()):
+            x, y = coords[vid]
+            name = g_ig.vs[vid]["label"]
+
+            # color base
+            face = "#8ce99a"   # verde suave
+
+            # visitados (cualquier algoritmo)
+            if name in visited:
+                face = "#ffd43b"   # amarillo
+
+            # ruta BFS tiene prioridad sobre "visitado"
+            if name in bfs_nodes:
+                face = "tomato"
+
+            # ruta DFS pisa colores anteriores
+            if name in dfs_nodes:
+                face = "#4dabf7"
+
+            circle = Circle(
+                (x, y),
+                r,
+                facecolor=face,
+                edgecolor="black",
+                linewidth=1.8,
+                zorder=5,
+            )
+            ax.add_patch(circle)
+            ax.text(x, y, name, ha="center", va="center", fontsize=9, zorder=6)
+
+        ax.set_xlim(-0.1, 1.1)
+        ax.set_ylim(-0.1, 1.1)
+        ax.set_aspect("equal")
+
+        return self._figure_to_base64(fig)
+
+
+    def _tree_base64(self, res: dict, figsize=(4, 3)):
+        parents = res.get("parents")
+        if not parents:
+            return ""
+
+        root_node = None
+        for n, p in parents.items():
+            if p is None:
+                root_node = n
+                break
+        if root_node is None:
+            return ""
+
+        nodes = list(parents.keys())
+        name_to_idx = {name: i for i, name in enumerate(nodes)}
+        edges = []
+        for n, p in parents.items():
+            if p is not None:
+                edges.append((name_to_idx[p], name_to_idx[n]))
+
+        tree_g = ig.Graph()
+        tree_g.add_vertices(len(nodes))
+        if edges:
+            tree_g.add_edges(edges)
+        tree_g.vs["label"] = nodes
+
+        layout = tree_g.layout("tree", root=[name_to_idx[root_node]])
+        coords = self._normalized_layout(layout)
+        coords = [(x, 1 - y) for x, y in coords]
+        r = 0.05
+
+        fig = Figure(figsize=figsize, dpi=100)
+        ax = fig.add_subplot(111)
+        ax.set_axis_off()
+
         for u, v in tree_g.get_edgelist():
             x1, y1 = coords[u]
             x2, y2 = coords[v]
             dx, dy = x2 - x1, y2 - y1
             length = (dx**2 + dy**2) ** 0.5 or 1.0
             ux, uy = dx / length, dy / length
-
             sx1, sy1 = x1 + ux * r, y1 + uy * r
             sx2, sy2 = x2 - ux * r, y2 - uy * r
-
             ax.plot([sx1, sx2], [sy1, sy2], color="black", linewidth=1.8)
 
-        # Nodos
         for vid in range(tree_g.vcount()):
             x, y = coords[vid]
             circle = Circle((x, y), r, facecolor="white",
@@ -452,65 +768,230 @@ class GraphApp:
         ax.set_ylim(-0.1, 1.1)
         ax.set_aspect("equal")
 
-        canvas = FigureCanvasTkAgg(fig, master=frame)
-        canvas.draw()
-        canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        return self._figure_to_base64(fig)
+    
+    # Animación BFS (opcional)
+    
+    def _animar_bfs(self, page: ft.Page, res: dict):
+        """
+        Anima el recorrido BFS en el panel 'Grafo cargado'.
+        - Va pintando los nodos visitados según res["order"].
+        - Al final resalta la ruta más corta start→goal.
+        """
+        orden = res.get("order", [])
+        ruta = res.get("path")
 
-        # ---- Panel de texto con las consideraciones del algoritmo ----
-        text = tk.Text(frame, height=10, font=("Consolas", 9))
-        text.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=False)
+        visitados = set()
 
-        start = result.get("start")
-        goal = result.get("goal")
-        tiempo = result.get("time", 0.0)
+        # 1) Recorrido: pintamos nodo por nodo como visitado (amarillo)
+        for nodo in orden:
+            visitados.add(nodo)
+            self.graph_image.src_base64 = self._graph_base64(
+                figsize=(4, 3),
+                visited=visitados,
+            )
+            page.update()
+            time.sleep(0.3)   # ajusta velocidad si quieres
 
-        if algorithm == "bfs":
-            text.insert(tk.END, "ALGORITMO BFS\n\n")
-            text.insert(tk.END, f"start = {start}   finish = {goal}\n")
-            text.insert(tk.END, f"tiempo de ejecución = {tiempo:.6f} s\n\n")
+        # 2) Frame final: todos visitados + ruta BFS en rojo
+        self.graph_image.src_base64 = self._graph_base64(
+            figsize=(4, 3),
+            visited=visitados,
+            bfs_path=ruta,
+        )
+        page.update()
 
-            text.insert(tk.END, "distancias (nodo -> distancia desde start):\n")
-            for n, d in result["distances"].items():
-                text.insert(tk.END, f"  {n}: {d}\n")
+    def run_bfs_campus(self, page: ft.Page):
+        if not self.grafo or not self.start_dd.value:
+            return
 
-            text.insert(tk.END, "\npadres (nodo <- padre en árbol BFS):\n")
-            for n, p in result["parents"].items():
-                text.insert(tk.END, f"  {n} <- {p}\n")
+        start = self.start_dd.value
 
-            text.insert(tk.END, "\nruta más corta start → goal:\n")
-            path = result.get("path")
-            if path is None:
-                text.insert(tk.END, "  No existe ruta entre start y goal.\n")
-            else:
-                text.insert(tk.END, "  " + " -> ".join(path) + "\n")
+        # 1) BFS completo desde start (no paramos en la primera salida)
+        res = self.grafo.bfs(start, goal=None)
 
-        else:  # DFS
-            text.insert(tk.END, "ALGORITMO DFS\n\n")
-            text.insert(tk.END, f"start = {start}   goal = {goal}\n")
-            text.insert(tk.END, f"tiempo de ejecución = {tiempo:.6f} s\n\n")
+        # 2) Detectar salidas automáticamente
+        salidas = self.grafo.nodos_salida(prefijo="Salida")
+        salidas_reach = [s for s in salidas if s in res["distances"]]
 
-            text.insert(tk.END, "padres (nodo <- padre en árbol DFS):\n")
-            for n, p in result["parents"].items():
-                text.insert(tk.END, f"  {n} <- {p}\n")
+        if not salidas_reach:
+            page.snack_bar = ft.SnackBar(
+                ft.Text("No se encontró ninguna salida alcanzable desde el nodo de inicio.")
+            )
+            page.snack_bar.open = True
+            page.update()
+            return
 
-            text.insert(tk.END, "\nruta encontrada por DFS (start → goal):\n")
-            dfs_path = result.get("dfs_path")
-            if dfs_path is None:
-                text.insert(tk.END, "  No existe ruta entre start y goal.\n")
-            else:
-                text.insert(tk.END, "  " + " -> ".join(dfs_path) + "\n")
+        # 3) Escoger la salida más cercana (distancia mínima)
+        salida_cercana = min(salidas_reach, key=lambda s: res["distances"][s])
 
-            text.insert(tk.END, "\ncamino de mayor profundidad desde start (deepest_path):\n")
-            deepest = result.get("deepest_path")
-            if deepest is None:
-                text.insert(tk.END, "  No se pudo determinar el camino más profundo.\n")
-            else:
-                text.insert(tk.END, "  " + " -> ".join(deepest) + "\n")
+        # 4) Reconstruir ruta hacia esa salida
+        ruta = self.grafo._reconstruir_camino(res["parents"], start, salida_cercana)
 
-        text.config(state=tk.DISABLED)
+        # 5) Guardar información para mostrar / dibujar árbol
+        res["start"] = start
+        res["goal"] = salida_cercana
+        res["path"] = ruta
+        self.bfs_result = res
+
+        # 6) ANIMACIÓN en el grafo cargado
+        self._animar_bfs(page, res)
+
+        # 7) Panel de texto + árbol BFS en la derecha
+        self.show_bfs_info(page, res)
+        self.update_tree_image(page, res, algorithm="bfs")
+
+    
+    # Animación DFS (opcional)
+    
+    def _animar_dfs(self, page: ft.Page, res: dict):
+        """
+        Anima el recorrido DFS en el panel 'Grafo cargado'.
+        - Va pintando nodos visitados según res["order"].
+        - Al final resalta la ruta DFS start→goal.
+        """
+        orden = res.get("order", [])
+        ruta_dfs = res.get("dfs_path")
+
+        visitados = set()
+
+        # 1) Recorrido DFS: nodo por nodo
+        for nodo in orden:
+            visitados.add(nodo)
+            self.graph_image.src_base64 = self._graph_base64(
+                figsize=(4, 3),
+                visited=visitados,
+            )
+            page.update()
+            time.sleep(0.3)
+
+        # 2) Frame final: todos visitados + ruta DFS en celeste
+        self.graph_image.src_base64 = self._graph_base64(
+            figsize=(4, 3),
+            visited=visitados,
+            dfs_path=ruta_dfs,
+        )
+        page.update()
+
+    def run_dfs_campus(self, page: ft.Page):
+        if not self.grafo or not self.start_dd.value:
+            return
+
+        start = self.start_dd.value
+
+        # Usamos BFS solo para elegir la salida más cercana
+        bfs_res = self.grafo.bfs(start, goal=None)
+        salidas = self.grafo.nodos_salida(prefijo="Salida")
+        salidas_reach = [s for s in salidas if s in bfs_res["distances"]]
+
+        if not salidas_reach:
+            page.snack_bar = ft.SnackBar(
+                ft.Text("No se encontró ninguna salida alcanzable desde el nodo de inicio.")
+            )
+            page.snack_bar.open = True
+            page.update()
+            return
+
+        salida_cercana = min(salidas_reach, key=lambda s: bfs_res["distances"][s])
+
+        # DFS con esa salida como goal
+        res = self.grafo.dfs(start, goal=salida_cercana)
+        res["start"] = start
+        res["goal"] = salida_cercana
+        self.dfs_result = res
+
+        # ANIMACIÓN en el grafo cargado
+        self._animar_dfs(page, res)
+
+        # Panel de texto + árbol DFS
+        self.show_dfs_info(page, res)
+        self.update_tree_image(page, res, algorithm="dfs")
 
 
-def run_app():
-    root = tk.Tk()
-    app = GraphApp(root)
-    root.mainloop()
+    # ---------- versiones pequeñas para la pantalla principal ----------
+    def update_graph_image(self, page: ft.Page):
+        if not self.graph_image:
+            return
+        self.graph_image.src_base64 = self._graph_base64(figsize=(4, 3))
+        page.update()
+
+    def update_tree_image(self, page: ft.Page, res: dict, algorithm: str):
+        if not self.tree_image:
+            return
+        self.tree_image.src_base64 = self._tree_base64(res, figsize=(4, 3))
+        page.update()
+
+    # ==========================================================
+    #   DIÁLOGOS: VER GRAFO / ÁRBOL EN GRANDE
+    # ==========================================================
+    def _close_dialog(self, e: ft.ControlEvent):
+        page = e.page
+        if page.dialog:
+            page.dialog.open = False
+            page.update()
+
+    def show_graph_dialog(self, e: ft.ControlEvent):
+        page = e.page
+
+        if not self.grafo:
+            page.snack_bar = ft.SnackBar(
+                ft.Text("Grafo aún no cargado. Carga un archivo .txt primero.")
+            )
+            page.snack_bar.open = True
+            page.update()
+            return
+
+        img = ft.Image(width=900, height=600, fit=ft.ImageFit.CONTAIN)
+        img.src_base64 = self._graph_base64(figsize=(8, 6))
+
+        dlg = ft.AlertDialog(
+            title=ft.Text("Grafo del campus"),
+            content=img,
+            actions=[
+                ft.TextButton("Cerrar", on_click=self._close_dialog)
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+
+        page.dialog = dlg
+        dlg.open = True
+        page.update()
+
+    def show_tree_dialog(self, e: ft.ControlEvent):
+        page = e.page
+
+        res = self.bfs_result or self.dfs_result
+        if not res:
+            page.snack_bar = ft.SnackBar(
+                ft.Text("Árbol aún no cargado. Ejecuta BFS o DFS primero.")
+            )
+            page.snack_bar.open = True
+            page.update()
+            return
+
+        img = ft.Image(width=900, height=600, fit=ft.ImageFit.CONTAIN)
+        img.src_base64 = self._tree_base64(res, figsize=(8, 6))
+
+        dlg = ft.AlertDialog(
+            title=ft.Text("Árbol BFS/DFS"),
+            content=img,
+            actions=[
+                ft.TextButton("Cerrar", on_click=self._close_dialog)
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+
+        page.dialog = dlg
+        dlg.open = True
+        page.update()
+
+
+
+
+def main(page: ft.Page):
+    app = FletGraphApp()
+    app.main(page)
+
+
+if __name__ == "__main__":
+    ft.app(target=main)
